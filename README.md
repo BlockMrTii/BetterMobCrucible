@@ -1,4 +1,4 @@
-# MythicItemSkills
+# BetterMobCrucible
 
 Paper plugin for MythicMobs by Leon. Runs MythicMobs item `Skills` without MythicCrucible.
 
@@ -15,4 +15,4 @@ Requires JDK 21+.
 
     mvn package
 
-The jar is written to `target/MythicItemSkills-1.0.0.jar`.
+The jar is written to `target/BetterMobCrucible-1.0.0.jar`.

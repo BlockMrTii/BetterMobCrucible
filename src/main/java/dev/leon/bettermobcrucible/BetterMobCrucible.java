@@ -1,4 +1,4 @@
-package dev.leon.itemskills;
+package dev.leon.bettermobcrucible;
 
 import io.lumine.mythic.api.adapters.AbstractEntity;
 import io.lumine.mythic.api.config.MythicLineConfig;
@@ -54,7 +54,7 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
-public final class ItemSkillsPlugin extends JavaPlugin implements Listener {
+public final class BetterMobCrucible extends JavaPlugin implements Listener {
    private static final Pattern TRIGGER = Pattern.compile("\\s*~on([A-Za-z]+)(?::(\\d+))?\\s*$");
    private final Map<String, Map<String, String>> dispatch = new HashMap<>();
    private final Map<String, List<String>> timerSkills = new HashMap<>();
@@ -145,7 +145,7 @@ public final class ItemSkillsPlugin extends JavaPlugin implements Listener {
       List<File> found = new ArrayList<>();
 
       try (Stream<Path> paths = Files.walk(root.toPath())) {
-         paths.filter(p -> p.toString().endsWith(".yml")).filter(ItemSkillsPlugin::underItemsDirectory).forEach(p -> found.add(p.toFile()));
+         paths.filter(p -> p.toString().endsWith(".yml")).filter(BetterMobCrucible::underItemsDirectory).forEach(p -> found.add(p.toFile()));
       } catch (IOException var8) {
          this.getLogger().warning("Could not scan " + root + ": " + var8.getMessage());
       }
@@ -292,10 +292,10 @@ public final class ItemSkillsPlugin extends JavaPlugin implements Listener {
       String var2 = event.getMechanicName().toLowerCase(Locale.ROOT);
       switch (var2) {
          case "setitemnbt":
-            event.register(new ItemSkillsPlugin.SetItemNbtMechanic(this, event.getConfig()));
+            event.register(new BetterMobCrucible.SetItemNbtMechanic(this, event.getConfig()));
             break;
          case "setlore":
-            event.register(new ItemSkillsPlugin.SetLoreMechanic(event.getConfig()));
+            event.register(new BetterMobCrucible.SetLoreMechanic(event.getConfig()));
       }
    }
 
@@ -330,11 +330,11 @@ public final class ItemSkillsPlugin extends JavaPlugin implements Listener {
    }
 
    static final class SetItemNbtMechanic extends SkillMechanic implements ITargetedEntitySkill {
-      private final ItemSkillsPlugin plugin;
+      private final BetterMobCrucible plugin;
       private final PlaceholderString key;
       private final PlaceholderString value;
 
-      SetItemNbtMechanic(ItemSkillsPlugin plugin, MythicLineConfig config) {
+      SetItemNbtMechanic(BetterMobCrucible plugin, MythicLineConfig config) {
          super(MythicBukkit.inst().getSkillManager(), config.getLine(), config);
          this.plugin = plugin;
          this.key = config.getPlaceholderString(new String[]{"key", "k"}, "", new String[0]);
@@ -342,7 +342,7 @@ public final class ItemSkillsPlugin extends JavaPlugin implements Listener {
       }
 
       public SkillResult castAtEntity(SkillMetadata data, AbstractEntity target) {
-         ItemStack held = ItemSkillsPlugin.mainHand(target.getBukkitEntity());
+         ItemStack held = BetterMobCrucible.mainHand(target.getBukkitEntity());
          if (held == null) {
             return SkillResult.INVALID_TARGET;
          } else {
@@ -372,7 +372,7 @@ public final class ItemSkillsPlugin extends JavaPlugin implements Listener {
       }
 
       public SkillResult castAtEntity(SkillMetadata data, AbstractEntity target) {
-         ItemStack held = ItemSkillsPlugin.mainHand(target.getBukkitEntity());
+         ItemStack held = BetterMobCrucible.mainHand(target.getBukkitEntity());
          if (held == null) {
             return SkillResult.INVALID_TARGET;
          } else {

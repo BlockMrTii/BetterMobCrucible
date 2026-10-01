@@ -1,6 +1,6 @@
-name: MythicItemSkills
+name: BetterMobCrucible
 version: 1.0.0
-main: dev.leon.itemskills.ItemSkillsPlugin
+main: dev.leon.bettermobcrucible.BetterMobCrucible
 api-version: '1.21'
 author: leon
 description: Runs MythicMobs item Skills without MythicCrucible.
