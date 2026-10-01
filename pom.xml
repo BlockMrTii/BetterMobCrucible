@@ -28,15 +28,22 @@
       <version>1.21.11-R0.1-SNAPSHOT</version>
       <scope>provided</scope>
     </dependency>
-    <dependency>
-      <groupId>eu.northsoft</groupId>
-      <artifactId>bettermob</artifactId>
-      <version>1.0.0</version>
-      <scope>provided</scope>
-    </dependency>
   </dependencies>
 
   <build>
     <finalName>${project.artifactId}-${project.version}</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <!-- BetterMob-API-Kopie nur zum Kompilieren; zur Laufzeit liefert BetterMob die Klassen. -->
+          <excludes>
+            <exclude>eu/northsoft/**</exclude>
+          </excludes>
+        </configuration>
+      </plugin>
+    </plugins>
   </build>
 </project>

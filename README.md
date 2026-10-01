@@ -37,10 +37,12 @@ and BetterMob is reloaded when they change.
 
 ## Build
 
-JDK 21 and a local BetterMob build (`mvn install` in the BetterMob repo), then:
+JDK 21:
 
     mvn package
 
+The BetterMob API classes under `src/main/java/eu/northsoft/bettermob/api` are a compile-only copy
+(excluded from the jar, BetterMob provides them at runtime). Update them when the BetterMob API changes.
+
 CI (`.github/workflows/build.yml`) builds on every push to `main` and creates or updates the
-release `v<version>`. It needs the repository secret `BETTERMOB_TOKEN` (read access to the private
-BetterMob repo).
+release `v<version>`.

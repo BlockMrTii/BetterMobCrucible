@@ -20,18 +20,6 @@ jobs:
           java-version: 21
           cache: maven
 
-      # BetterMob ist ein privates Repo: Secret BETTERMOB_TOKEN = Personal Access Token
-      # (fine-grained, Contents: read auf HyperGaming99/bettermob).
-      - name: Checkout BetterMob
-        uses: actions/checkout@v4
-        with:
-          repository: HyperGaming99/bettermob
-          token: ${{ secrets.BETTERMOB_TOKEN }}
-          path: .bettermob
-
-      - name: Install BetterMob API
-        run: mvn -B -ntp -f .bettermob/pom.xml install -DskipTests
-
       - name: Build
         run: mvn -B -ntp package
 
