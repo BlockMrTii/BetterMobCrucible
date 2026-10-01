@@ -1,0 +1,15 @@
+name: MythicItemSkills
+version: 1.0.0
+main: dev.leon.itemskills.ItemSkillsPlugin
+api-version: '1.21'
+author: leon
+description: Runs MythicMobs item Skills without MythicCrucible.
+depend:
+  - MythicMobs
+commands:
+  itemskills:
+    description: Dump registered item skill triggers and the held item's stored NBT.
+    permission: itemskills.debug
+permissions:
+  itemskills.debug:
+    default: op
