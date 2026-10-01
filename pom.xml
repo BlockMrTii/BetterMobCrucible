@@ -19,41 +19,24 @@
       <id>papermc</id>
       <url>https://repo.papermc.io/repository/maven-public/</url>
     </repository>
-    <repository>
-      <id>lumine</id>
-      <url>https://mvn.lumine.io/repository/maven-public/</url>
-    </repository>
   </repositories>
 
   <dependencies>
     <dependency>
       <groupId>io.papermc.paper</groupId>
       <artifactId>paper-api</artifactId>
-      <version>26.2.build.98-stable</version>
+      <version>1.21.11-R0.1-SNAPSHOT</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
-      <groupId>io.lumine</groupId>
-      <artifactId>Mythic-Dist</artifactId>
-      <version>5.13.0</version>
+      <groupId>eu.northsoft</groupId>
+      <artifactId>bettermob</artifactId>
+      <version>1.0.0</version>
       <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter</artifactId>
-      <version>5.11.3</version>
-      <scope>test</scope>
     </dependency>
   </dependencies>
 
   <build>
     <finalName>${project.artifactId}-${project.version}</finalName>
-    <plugins>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <version>3.2.5</version>
-      </plugin>
-    </plugins>
   </build>
 </project>

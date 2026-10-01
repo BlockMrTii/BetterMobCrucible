@@ -1,21 +1,7 @@
 package dev.leon.bettermobcrucible;
 
-import io.lumine.mythic.api.adapters.AbstractEntity;
-import io.lumine.mythic.api.config.MythicLineConfig;
-import io.lumine.mythic.api.skills.ITargetedEntitySkill;
-import io.lumine.mythic.api.skills.SkillMetadata;
-import io.lumine.mythic.api.skills.SkillResult;
-import io.lumine.mythic.api.skills.placeholders.PlaceholderString;
-import io.lumine.mythic.bukkit.BukkitAdapter;
-import io.lumine.mythic.bukkit.MythicBukkit;
-import io.lumine.mythic.bukkit.events.MythicMechanicLoadEvent;
-import io.lumine.mythic.bukkit.events.MythicPlaceholdersLoadEvent;
-import io.lumine.mythic.bukkit.events.MythicReloadedEvent;
-import io.lumine.mythic.core.skills.MetaSkill;
-import io.lumine.mythic.core.skills.SkillExecutor;
-import io.lumine.mythic.core.skills.SkillMechanic;
-import io.lumine.mythic.core.skills.placeholders.Placeholder;
-import io.lumine.mythic.core.skills.placeholders.PlaceholderExecutor;
+import eu.northsoft.bettermob.api.BetterMobAPI;
+import eu.northsoft.bettermob.api.MechanicContext;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,15 +12,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
@@ -48,346 +36,352 @@ import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.CustomModelDataComponent;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
+/**
+ * Item-Skills fuer BetterMob: Items werden in {@code items/*.yml} definiert und loesen
+ * ueber {@code ~onUse}, {@code ~onSwing}, ... BetterMob-Skills aus.
+ */
 public final class BetterMobCrucible extends JavaPlugin implements Listener {
-   private static final Pattern TRIGGER = Pattern.compile("\\s*~on([A-Za-z]+)(?::(\\d+))?\\s*$");
-   private final Map<String, Map<String, String>> dispatch = new HashMap<>();
-   private final Map<String, List<String>> timerSkills = new HashMap<>();
-   private final Map<String, Integer> intervals = new HashMap<>();
-   private long tick;
+    private static final Pattern TRIGGER = Pattern.compile("\\s*~on([A-Za-z]+)(?::(\\d+))?\\s*$");
+    private static final String PACK_NAME = "BetterMobCrucible";
+    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacyAmpersand();
 
-   public void onEnable() {
-      this.getServer().getPluginManager().registerEvents(this, this);
-      this.getServer().getScheduler().runTask(this, () -> {
-         try {
-            this.registerNbtPlaceholder(MythicBukkit.inst().getPlaceholderManager());
-            this.getLogger().info("Registered the itemnbt placeholder.");
-         } catch (LinkageError | Exception var2) {
-            this.getLogger().warning("Could not register the itemnbt placeholder: " + var2);
-         }
+    private final Map<String, ItemDefinition> items = new LinkedHashMap<>();
+    private final Map<String, Map<String, String>> dispatch = new HashMap<>();
+    private final Map<String, List<String>> timerSkills = new HashMap<>();
+    private final Map<String, Integer> intervals = new HashMap<>();
+    private long tick;
 
-         this.rebuild();
-      });
-      this.getServer().getScheduler().runTaskTimer(this, this::runTimers, 1L, 1L);
-   }
+    record ItemDefinition(String id, Material material, String display, List<String> lore, int modelData,
+                          List<String> skills) {}
 
-   NamespacedKey nbtKey(String key) {
-      return new NamespacedKey(this, key.toLowerCase(Locale.ROOT));
-   }
+    @Override
+    public void onEnable() {
+        getServer().getPluginManager().registerEvents(this, this);
+        saveDefaultItems();
 
-   @EventHandler
-   public void onMythicReload(MythicReloadedEvent event) {
-      this.getServer().getScheduler().runTask(this, this::rebuild);
-   }
+        BetterMobAPI api = BetterMobAPI.get();
+        api.registerMechanic(this, "setitemnbt", this::setItemNbt);
+        api.registerMechanic(this, "setlore", this::setLore);
 
-   private void rebuild() {
-      this.dispatch.clear();
-      this.timerSkills.clear();
-      this.intervals.clear();
-      Plugin mythic = this.getServer().getPluginManager().getPlugin("MythicMobs");
-      if (mythic == null) {
-         this.getLogger().severe("MythicMobs not found, item skills stay disabled.");
-      } else {
-         SkillExecutor skillManager = MythicBukkit.inst().getSkillManager();
-         int registered = 0;
+        getServer().getScheduler().runTask(this, this::rebuild);
+        getServer().getScheduler().runTaskTimer(this, this::runTimers, 1L, 1L);
+    }
 
-         for (File file : this.itemFiles(mythic.getDataFolder())) {
+    @Override
+    public void onDisable() {
+        // Mechanics raeumt BetterMob selbst beim Deaktivieren dieses Plugins weg.
+    }
+
+    NamespacedKey itemKey() {
+        return new NamespacedKey(this, "item_id");
+    }
+
+    NamespacedKey nbtKey(String key) {
+        return new NamespacedKey(this, "nbt/" + key.toLowerCase(Locale.ROOT));
+    }
+
+    private void saveDefaultItems() {
+        File folder = new File(getDataFolder(), "items");
+        if (!folder.exists()) {
+            folder.mkdirs();
+            saveResource("items/example.yml", false);
+        }
+    }
+
+    // ---- Laden ------------------------------------------------------------------------
+
+    /** Items einlesen, Skills als Pack in BetterMob ablegen und BetterMob neu laden, falls sich etwas geaendert hat. */
+    private void rebuild() {
+        items.clear();
+        dispatch.clear();
+        timerSkills.clear();
+        intervals.clear();
+
+        YamlConfiguration generated = new YamlConfiguration();
+        int registered = 0;
+        for (File file : itemFiles(new File(getDataFolder(), "items"))) {
             YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
-
             for (String itemId : yaml.getKeys(false)) {
-               List<String> lines = yaml.getStringList(itemId + ".Skills");
-               if (!lines.isEmpty()) {
-                  for (Entry<String, List<String>> group : groupByTrigger(lines).entrySet()) {
-                     String trigger = group.getKey();
-                     String skillName = "itemskills_" + itemId + "_" + trigger.replace(':', '_');
-                     skillManager.registerSkill(skillName, new MetaSkill(skillManager, file, group.getValue()));
-                     if (trigger.startsWith("timer:")) {
-                        this.intervals.put(skillName, Integer.parseInt(trigger.substring("timer:".length())));
-                        this.timerSkills.computeIfAbsent(itemId, k -> new ArrayList<>()).add(skillName);
-                     } else {
-                        this.dispatch.computeIfAbsent(itemId, k -> new HashMap<>()).put(trigger, skillName);
-                     }
+                ConfigurationSection section = yaml.getConfigurationSection(itemId);
+                if (section == null) continue;
+                ItemDefinition item = parseItem(itemId, section);
+                if (item == null) continue;
+                items.put(itemId.toLowerCase(Locale.ROOT), item);
 
-                     registered++;
-                  }
-               }
+                for (Map.Entry<String, List<String>> group : groupByTrigger(item.skills()).entrySet()) {
+                    String trigger = group.getKey();
+                    String skillName = skillName(itemId, trigger);
+                    generated.set(skillName + ".Skills", group.getValue());
+                    if (trigger.startsWith("timer:")) {
+                        intervals.put(skillName, Integer.parseInt(trigger.substring("timer:".length())));
+                        timerSkills.computeIfAbsent(item.id().toLowerCase(Locale.ROOT), k -> new ArrayList<>()).add(skillName);
+                    } else {
+                        dispatch.computeIfAbsent(item.id().toLowerCase(Locale.ROOT), k -> new HashMap<>()).put(trigger, skillName);
+                    }
+                    registered++;
+                }
             }
-         }
+        }
 
-         this.getLogger().info("Registered " + registered + " item skill trigger(s).");
-      }
-   }
+        syncSkillPack(generated);
+        getLogger().info(items.size() + " Items mit " + registered + " Skill-Trigger(n) geladen.");
+    }
 
-   static Map<String, List<String>> groupByTrigger(List<String> lines) {
-      Map<String, List<String>> byTrigger = new LinkedHashMap<>();
+    private ItemDefinition parseItem(String id, ConfigurationSection section) {
+        String materialName = section.getString("Material", section.getString("Id", "STONE"));
+        Material material = Material.matchMaterial(materialName);
+        if (material == null || material.isAir()) {
+            getLogger().warning("Item '" + id + "': Material '" + materialName + "' ist unbekannt - uebersprungen.");
+            return null;
+        }
+        return new ItemDefinition(id, material, section.getString("Display", ""), section.getStringList("Lore"),
+                section.getInt("Model", 0), section.getStringList("Skills"));
+    }
 
-      for (String line : lines) {
-         Matcher matcher = TRIGGER.matcher(line);
-         if (matcher.find()) {
-            String trigger = matcher.group(1).toLowerCase(Locale.ROOT);
-            if (matcher.group(2) != null) {
-               trigger = trigger + ":" + matcher.group(2);
+    /**
+     * BetterMob kennt nur Skills aus Dateien, daher schreiben wir die Item-Skills in einen
+     * eigenen Pack (packs/BetterMobCrucible/skills/items.yml). Aendert sich der Inhalt,
+     * laden wir BetterMob neu.
+     */
+    private void syncSkillPack(YamlConfiguration generated) {
+        File betterMobFolder = getServer().getPluginManager().getPlugin("BetterMob").getDataFolder();
+        File target = new File(betterMobFolder, "packs/" + PACK_NAME + "/skills/items.yml");
+        String content = generated.saveToString();
+        try {
+            if (target.isFile() && Files.readString(target.toPath()).equals(content)) return;
+            target.getParentFile().mkdirs();
+            Files.writeString(target.toPath(), content);
+        } catch (IOException e) {
+            getLogger().warning("Konnte " + target + " nicht schreiben: " + e.getMessage());
+            return;
+        }
+        BetterMobAPI.get().reload();
+        getLogger().info("Item-Skills in BetterMob aktualisiert.");
+    }
+
+    static String skillName(String itemId, String trigger) {
+        return ("bmc_" + itemId + "_" + trigger).toLowerCase(Locale.ROOT).replace(':', '_').replace('.', '_');
+    }
+
+    static Map<String, List<String>> groupByTrigger(List<String> lines) {
+        Map<String, List<String>> byTrigger = new LinkedHashMap<>();
+        for (String line : lines) {
+            Matcher matcher = TRIGGER.matcher(line);
+            if (matcher.find()) {
+                String trigger = matcher.group(1).toLowerCase(Locale.ROOT);
+                if (matcher.group(2) != null) trigger = trigger + ":" + matcher.group(2);
+                byTrigger.computeIfAbsent(trigger, k -> new ArrayList<>()).add(line.substring(0, matcher.start()).trim());
             }
+        }
+        return byTrigger;
+    }
 
-            byTrigger.computeIfAbsent(trigger, k -> new ArrayList<>()).add(line.substring(0, matcher.start()).trim());
-         }
-      }
+    private List<File> itemFiles(File root) {
+        List<File> found = new ArrayList<>();
+        try (Stream<Path> paths = Files.walk(root.toPath())) {
+            paths.filter(p -> p.toString().endsWith(".yml")).forEach(p -> found.add(p.toFile()));
+        } catch (IOException e) {
+            getLogger().warning("Konnte " + root + " nicht lesen: " + e.getMessage());
+        }
+        return found;
+    }
 
-      return byTrigger;
-   }
+    // ---- Items ------------------------------------------------------------------------
 
-   private List<File> itemFiles(File root) {
-      List<File> found = new ArrayList<>();
-
-      try (Stream<Path> paths = Files.walk(root.toPath())) {
-         paths.filter(p -> p.toString().endsWith(".yml")).filter(BetterMobCrucible::underItemsDirectory).forEach(p -> found.add(p.toFile()));
-      } catch (IOException var8) {
-         this.getLogger().warning("Could not scan " + root + ": " + var8.getMessage());
-      }
-
-      return found;
-   }
-
-   private static boolean underItemsDirectory(Path path) {
-      for (Path part : path.getParent()) {
-         if (part.toString().equalsIgnoreCase("items")) {
-            return true;
-         }
-      }
-
-      return false;
-   }
-
-   private void fire(Player player, ItemStack stack, String trigger) {
-      if (stack != null && !stack.getType().isAir()) {
-         String itemId = MythicBukkit.inst().getItemManager().getMythicTypeFromItem(stack);
-         if (itemId != null) {
-            Map<String, String> triggers = this.dispatch.get(itemId);
-            if (triggers != null) {
-               String skill = triggers.get(trigger);
-               if (skill != null) {
-                  MythicBukkit.inst().getAPIHelper().castSkill(player, skill);
-               }
-            }
-         }
-      }
-   }
-
-   @EventHandler
-   public void onInteract(PlayerInteractEvent event) {
-      if (event.getHand() == EquipmentSlot.HAND) {
-         ItemStack held = event.getPlayer().getInventory().getItemInMainHand();
-         switch (event.getAction()) {
-            case RIGHT_CLICK_AIR:
-            case RIGHT_CLICK_BLOCK:
-               this.fire(event.getPlayer(), held, "use");
-               break;
-            case LEFT_CLICK_AIR:
-            case LEFT_CLICK_BLOCK:
-               this.fire(event.getPlayer(), held, "swing");
-         }
-      }
-   }
-
-   @EventHandler
-   public void onSwapHands(PlayerSwapHandItemsEvent event) {
-      ItemStack toOffHand = event.getOffHandItem();
-      ItemStack toMainHand = event.getMainHandItem();
-      this.fire(event.getPlayer(), toOffHand, "pressf");
-      if (!sameMythicType(toOffHand, toMainHand)) {
-         this.fire(event.getPlayer(), toMainHand, "pressf");
-      }
-   }
-
-   private static boolean sameMythicType(ItemStack a, ItemStack b) {
-      if (a != null && b != null) {
-         String left = MythicBukkit.inst().getItemManager().getMythicTypeFromItem(a);
-         return left != null && left.equals(MythicBukkit.inst().getItemManager().getMythicTypeFromItem(b));
-      } else {
-         return false;
-      }
-   }
-
-   @EventHandler
-   public void onHeldSlotChange(PlayerItemHeldEvent event) {
-      this.fire(event.getPlayer(), event.getPlayer().getInventory().getItem(event.getNewSlot()), "equip");
-   }
-
-   @EventHandler
-   public void onPickup(EntityPickupItemEvent event) {
-      if (event.getEntity() instanceof Player player) {
-         ItemStack var4 = event.getItem().getItemStack();
-         this.fire(player, var4, "pickup");
-         this.fire(player, var4, "itempickup");
-      }
-   }
-
-   @EventHandler
-   public void onDrop(PlayerDropItemEvent event) {
-      ItemStack stack = event.getItemDrop().getItemStack();
-      this.fire(event.getPlayer(), stack, "drop");
-      this.fire(event.getPlayer(), stack, "itemdrop");
-   }
-
-   private void runTimers() {
-      this.tick++;
-      if (!this.timerSkills.isEmpty()) {
-         for (Player player : this.getServer().getOnlinePlayers()) {
-            ItemStack held = player.getInventory().getItemInMainHand();
-            if (!held.getType().isAir()) {
-               String itemId = MythicBukkit.inst().getItemManager().getMythicTypeFromItem(held);
-               if (itemId != null) {
-                  List<String> skills = this.timerSkills.get(itemId);
-                  if (skills != null) {
-                     for (String skill : skills) {
-                        if (this.tick % (long)this.intervals.get(skill).intValue() == 0L) {
-                           MythicBukkit.inst().getAPIHelper().castSkill(player, skill);
-                        }
-                     }
-                  }
-               }
-            }
-         }
-      }
-   }
-
-   public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-      sender.sendMessage("Item skill triggers: " + this.dispatch);
-      sender.sendMessage("Timer skills: " + this.timerSkills + " " + this.intervals);
-      if (sender instanceof Player player) {
-         ItemStack held = player.getInventory().getItemInMainHand();
-         if (held.getType().isAir()) {
-            sender.sendMessage("Nothing in your main hand.");
-            return true;
-         } else {
-            sender.sendMessage("Mythic type: " + MythicBukkit.inst().getItemManager().getMythicTypeFromItem(held));
-            if (held.hasItemMeta()) {
-               PersistentDataContainer pdc = held.getItemMeta().getPersistentDataContainer();
-
-               for (NamespacedKey key : pdc.getKeys()) {
-                  if (key.getNamespace().equals(this.getName().toLowerCase(Locale.ROOT))) {
-                     sender.sendMessage("  " + key.getKey() + " = " + (String)pdc.get(key, PersistentDataType.STRING));
-                  }
-               }
-            }
-
-            sender.sendMessage("itemnbt registered: " + (MythicBukkit.inst().getPlaceholderManager().getPlaceholder("itemnbt") != null));
-            AbstractEntity self = BukkitAdapter.adapt(player);
-            sender.sendMessage("<caster.itemnbt.trackname>   -> '" + PlaceholderString.of("<caster.itemnbt.trackname>").get(self) + "'");
-            sender.sendMessage("<caster.item.nbt.trackname> -> '" + PlaceholderString.of("<caster.item.nbt.trackname>").get(self) + "'");
-            return true;
-         }
-      } else {
-         return true;
-      }
-   }
-
-   @EventHandler
-   public void onMechanicLoad(MythicMechanicLoadEvent event) {
-      String var2 = event.getMechanicName().toLowerCase(Locale.ROOT);
-      switch (var2) {
-         case "setitemnbt":
-            event.register(new BetterMobCrucible.SetItemNbtMechanic(this, event.getConfig()));
-            break;
-         case "setlore":
-            event.register(new BetterMobCrucible.SetLoreMechanic(event.getConfig()));
-      }
-   }
-
-   @EventHandler
-   public void onPlaceholdersLoad(MythicPlaceholdersLoadEvent event) {
-      this.registerNbtPlaceholder((PlaceholderExecutor)event.getManager());
-   }
-
-   private void registerNbtPlaceholder(PlaceholderExecutor placeholders) {
-      placeholders.register(new String[]{"itemnbt", "item.nbt"}, Placeholder.entity((entity, key) -> {
-         if (entity != null && key != null) {
-            ItemStack held = mainHand(entity.getBukkitEntity());
-            if (held != null && held.hasItemMeta()) {
-               String value = (String)held.getItemMeta().getPersistentDataContainer().get(this.nbtKey(key), PersistentDataType.STRING);
-               return value == null ? "" : value;
-            } else {
-               return "";
-            }
-         } else {
-            return "";
-         }
-      }));
-   }
-
-   static ItemStack mainHand(Entity entity) {
-      if (entity instanceof LivingEntity living && living.getEquipment() != null) {
-         ItemStack held = living.getEquipment().getItemInMainHand();
-         return held.getType().isAir() ? null : held;
-      }
-
-      return null;
-   }
-
-   static final class SetItemNbtMechanic extends SkillMechanic implements ITargetedEntitySkill {
-      private final BetterMobCrucible plugin;
-      private final PlaceholderString key;
-      private final PlaceholderString value;
-
-      SetItemNbtMechanic(BetterMobCrucible plugin, MythicLineConfig config) {
-         super(MythicBukkit.inst().getSkillManager(), config.getLine(), config);
-         this.plugin = plugin;
-         this.key = config.getPlaceholderString(new String[]{"key", "k"}, "", new String[0]);
-         this.value = config.getPlaceholderString(new String[]{"value", "val", "v"}, "", new String[0]);
-      }
-
-      public SkillResult castAtEntity(SkillMetadata data, AbstractEntity target) {
-         ItemStack held = BetterMobCrucible.mainHand(target.getBukkitEntity());
-         if (held == null) {
-            return SkillResult.INVALID_TARGET;
-         } else {
-            String resolvedKey = this.key.get(data, target);
-            if (resolvedKey.isEmpty()) {
-               return SkillResult.INVALID_CONFIG;
-            } else {
-               ItemMeta meta = held.getItemMeta();
-               meta.getPersistentDataContainer().set(this.plugin.nbtKey(resolvedKey), PersistentDataType.STRING, this.value.get(data, target));
-               held.setItemMeta(meta);
-               ((LivingEntity)target.getBukkitEntity()).getEquipment().setItemInMainHand(held);
-               return SkillResult.SUCCESS;
-            }
-         }
-      }
-   }
-
-   static final class SetLoreMechanic extends SkillMechanic implements ITargetedEntitySkill {
-      private final List<PlaceholderString> lines = new ArrayList<>();
-
-      SetLoreMechanic(MythicLineConfig config) {
-         super(MythicBukkit.inst().getSkillManager(), config.getLine(), config);
-
-         for (String line : config.getStringList(new String[]{"lore", "l"}, "")) {
-            this.lines.add(PlaceholderString.of(line));
-         }
-      }
-
-      public SkillResult castAtEntity(SkillMetadata data, AbstractEntity target) {
-         ItemStack held = BetterMobCrucible.mainHand(target.getBukkitEntity());
-         if (held == null) {
-            return SkillResult.INVALID_TARGET;
-         } else {
-            List<Component> lore = new ArrayList<>(this.lines.size());
-
-            for (PlaceholderString line : this.lines) {
-               lore.add(LegacyComponentSerializer.legacyAmpersand().deserialize(line.get(data, target)));
-            }
-
-            ItemMeta meta = held.getItemMeta();
+    ItemStack create(ItemDefinition item) {
+        ItemStack stack = new ItemStack(item.material());
+        ItemMeta meta = stack.getItemMeta();
+        if (!item.display().isEmpty()) {
+            meta.displayName(LEGACY.deserialize(item.display()).decoration(TextDecoration.ITALIC, false));
+        }
+        if (!item.lore().isEmpty()) {
+            List<Component> lore = new ArrayList<>();
+            for (String line : item.lore()) lore.add(LEGACY.deserialize(line).decoration(TextDecoration.ITALIC, false));
             meta.lore(lore);
-            held.setItemMeta(meta);
-            ((LivingEntity)target.getBukkitEntity()).getEquipment().setItemInMainHand(held);
-            return SkillResult.SUCCESS;
-         }
-      }
-   }
+        }
+        if (item.modelData() != 0) {
+            CustomModelDataComponent cmd = meta.getCustomModelDataComponent();
+            cmd.setFloats(List.of((float) item.modelData()));
+            meta.setCustomModelDataComponent(cmd);
+        }
+        meta.getPersistentDataContainer().set(itemKey(), PersistentDataType.STRING, item.id());
+        stack.setItemMeta(meta);
+        return stack;
+    }
+
+    String itemIdOf(ItemStack stack) {
+        if (stack == null || stack.getType().isAir() || !stack.hasItemMeta()) return null;
+        String id = stack.getItemMeta().getPersistentDataContainer().get(itemKey(), PersistentDataType.STRING);
+        return id == null ? null : id.toLowerCase(Locale.ROOT);
+    }
+
+    // ---- Trigger ----------------------------------------------------------------------
+
+    private void fire(Player player, ItemStack stack, String trigger) {
+        String itemId = itemIdOf(stack);
+        if (itemId == null) return;
+        Map<String, String> triggers = dispatch.get(itemId);
+        if (triggers == null) return;
+        String skill = triggers.get(trigger);
+        if (skill != null) BetterMobAPI.get().runSkill(skill, player);
+    }
+
+    @EventHandler
+    public void onInteract(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) return;
+        ItemStack held = event.getPlayer().getInventory().getItemInMainHand();
+        switch (event.getAction()) {
+            case RIGHT_CLICK_AIR, RIGHT_CLICK_BLOCK -> fire(event.getPlayer(), held, "use");
+            case LEFT_CLICK_AIR, LEFT_CLICK_BLOCK -> fire(event.getPlayer(), held, "swing");
+            default -> { }
+        }
+    }
+
+    @EventHandler
+    public void onSwapHands(PlayerSwapHandItemsEvent event) {
+        ItemStack toOffHand = event.getOffHandItem();
+        ItemStack toMainHand = event.getMainHandItem();
+        fire(event.getPlayer(), toOffHand, "pressf");
+        String off = itemIdOf(toOffHand);
+        if (off == null || !off.equals(itemIdOf(toMainHand))) fire(event.getPlayer(), toMainHand, "pressf");
+    }
+
+    @EventHandler
+    public void onHeldSlotChange(PlayerItemHeldEvent event) {
+        fire(event.getPlayer(), event.getPlayer().getInventory().getItem(event.getNewSlot()), "equip");
+    }
+
+    @EventHandler
+    public void onPickup(EntityPickupItemEvent event) {
+        if (event.getEntity() instanceof Player player) {
+            ItemStack stack = event.getItem().getItemStack();
+            fire(player, stack, "pickup");
+            fire(player, stack, "itempickup");
+        }
+    }
+
+    @EventHandler
+    public void onDrop(PlayerDropItemEvent event) {
+        ItemStack stack = event.getItemDrop().getItemStack();
+        fire(event.getPlayer(), stack, "drop");
+        fire(event.getPlayer(), stack, "itemdrop");
+    }
+
+    private void runTimers() {
+        tick++;
+        if (timerSkills.isEmpty()) return;
+        for (Player player : getServer().getOnlinePlayers()) {
+            String itemId = itemIdOf(player.getInventory().getItemInMainHand());
+            if (itemId == null) continue;
+            List<String> skills = timerSkills.get(itemId);
+            if (skills == null) continue;
+            for (String skill : skills) {
+                if (tick % intervals.get(skill) == 0L) BetterMobAPI.get().runSkill(skill, player);
+            }
+        }
+    }
+
+    // ---- Mechanics --------------------------------------------------------------------
+
+    private static String param(Map<String, String> params, String... names) {
+        for (String name : names) {
+            String value = params.get(name);
+            if (value != null) return value;
+        }
+        return "";
+    }
+
+    private static LivingEntity targetOf(MechanicContext ctx) {
+        return ctx.target() instanceof LivingEntity living ? living : ctx.caster();
+    }
+
+    private static ItemStack mainHand(Entity entity) {
+        if (entity instanceof LivingEntity living && living.getEquipment() != null) {
+            ItemStack held = living.getEquipment().getItemInMainHand();
+            return held.getType().isAir() ? null : held;
+        }
+        return null;
+    }
+
+    /** {@code setitemnbt{key=x;value=y}} - schreibt einen String-Wert ins gehaltene Item. */
+    private void setItemNbt(MechanicContext ctx) {
+        LivingEntity target = targetOf(ctx);
+        ItemStack held = mainHand(target);
+        String key = param(ctx.params(), "key", "k");
+        if (held == null || key.isEmpty()) return;
+        ItemMeta meta = held.getItemMeta();
+        meta.getPersistentDataContainer().set(nbtKey(key), PersistentDataType.STRING, param(ctx.params(), "value", "val", "v"));
+        held.setItemMeta(meta);
+        target.getEquipment().setItemInMainHand(held);
+    }
+
+    /** {@code setlore{lore=Zeile 1|&aZeile 2}} - ersetzt die Lore des gehaltenen Items. */
+    private void setLore(MechanicContext ctx) {
+        LivingEntity target = targetOf(ctx);
+        ItemStack held = mainHand(target);
+        String raw = param(ctx.params(), "lore", "l");
+        if (held == null) return;
+        List<Component> lore = new ArrayList<>();
+        if (!raw.isEmpty()) {
+            for (String line : raw.split("\\|")) lore.add(LEGACY.deserialize(line).decoration(TextDecoration.ITALIC, false));
+        }
+        ItemMeta meta = held.getItemMeta();
+        meta.lore(lore);
+        held.setItemMeta(meta);
+        target.getEquipment().setItemInMainHand(held);
+    }
+
+    // ---- Befehl -----------------------------------------------------------------------
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        String sub = args.length == 0 ? "help" : args[0].toLowerCase(Locale.ROOT);
+        switch (sub) {
+            case "list" -> sender.sendMessage("Items: " + String.join(", ", items.keySet()));
+            case "reload" -> {
+                rebuild();
+                sender.sendMessage("BetterMobCrucible neu geladen.");
+            }
+            case "give" -> {
+                if (args.length < 2) {
+                    sender.sendMessage("/" + label + " give <item> [spieler]");
+                    return true;
+                }
+                ItemDefinition item = items.get(args[1].toLowerCase(Locale.ROOT));
+                Player target = args.length > 2 ? getServer().getPlayer(args[2]) : sender instanceof Player p ? p : null;
+                if (item == null) sender.sendMessage("Unbekanntes Item: " + args[1]);
+                else if (target == null) sender.sendMessage("Spieler nicht gefunden.");
+                else target.getInventory().addItem(create(item));
+            }
+            case "debug" -> debug(sender);
+            default -> sender.sendMessage("/" + label + " <give|list|reload|debug>");
+        }
+        return true;
+    }
+
+    private void debug(CommandSender sender) {
+        sender.sendMessage("Item skill triggers: " + dispatch);
+        sender.sendMessage("Timer skills: " + timerSkills + " " + intervals);
+        if (!(sender instanceof Player player)) return;
+        ItemStack held = player.getInventory().getItemInMainHand();
+        if (held.getType().isAir()) {
+            sender.sendMessage("Nothing in your main hand.");
+            return;
+        }
+        sender.sendMessage("Crucible item: " + itemIdOf(held));
+        if (held.hasItemMeta()) {
+            PersistentDataContainer pdc = held.getItemMeta().getPersistentDataContainer();
+            for (NamespacedKey key : pdc.getKeys()) {
+                if (key.getNamespace().equals(getName().toLowerCase(Locale.ROOT)) && key.getKey().startsWith("nbt/")) {
+                    sender.sendMessage("  " + key.getKey().substring(4) + " = " + pdc.get(key, PersistentDataType.STRING));
+                }
+            }
+        }
+    }
 }

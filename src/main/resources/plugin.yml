@@ -3,13 +3,14 @@ version: 1.0.0
 main: dev.leon.bettermobcrucible.BetterMobCrucible
 api-version: '1.21'
 author: leon
-description: Runs MythicMobs item Skills without MythicCrucible.
+description: Item skills for BetterMob.
 depend:
-  - MythicMobs
+  - BetterMob
 commands:
-  itemskills:
-    description: Dump registered item skill triggers and the held item's stored NBT.
-    permission: itemskills.debug
+  bettermobcrucible:
+    description: Give items, list them, reload and debug item skills.
+    aliases: [bmc]
+    permission: bettermobcrucible.admin
 permissions:
-  itemskills.debug:
+  bettermobcrucible.admin:
     default: op
