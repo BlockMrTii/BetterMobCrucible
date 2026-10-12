@@ -3,6 +3,7 @@ package dev.leon.bettermobcrucible;
 import eu.northsoft.bettermob.api.BetterMobAPI;
 import eu.northsoft.bettermob.api.MechanicContext;
 import eu.northsoft.bettermob.api.PlaceholderContext;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -44,7 +45,6 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitTask;
 
 /**
  * Zusatz-Trigger fuer BetterMob-Items: BetterMob liest die Items ({@code items/*.yml}) und
@@ -68,7 +68,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
 
     private final Map<String, NamespacedKey> nbtKeys = new ConcurrentHashMap<>();
     private volatile Snapshot snapshot = Snapshot.EMPTY;
-    private BukkitTask timerTask;
+    private ScheduledTask timerTask;
     private long tick;
     private Plugin betterMob;
     private BetterMobAPI api;
@@ -90,7 +90,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
             getLogger().warning("Diese BetterMob-Version hat keine Platzhalter-API - <itemnbt.key> ist aus. (" + e + ")");
         }
 
-        getServer().getScheduler().runTask(this, this::rebuild);
+        getServer().getGlobalRegionScheduler().run(this, task -> rebuild());
     }
 
     NamespacedKey nbtKey(String key) {
@@ -161,7 +161,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         if (timerTask != null) timerTask.cancel();
         timerTask = null;
         tick = 0;
-        if (period > 0) timerTask = getServer().getScheduler().runTaskTimer(this, this::runTimers, period, period);
+        if (period > 0) timerTask = getServer().getGlobalRegionScheduler().runAtFixedRate(this, task -> runTimers(), period, period);
     }
 
     /** BetterMobs {@code items/} und die {@code Items/}-Ordner aller aktiven Packs. */
@@ -300,17 +300,23 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         fire(current, event.getPlayer(), id, "itemdrop");
     }
 
+    /** Laeuft auf dem globalen Scheduler; die Item-Pruefung pro Spieler auf dessen eigenem Region-Thread (Folia). */
     private void runTimers() {
         Snapshot current = snapshot;
         tick += current.timerPeriod();
+        long now = tick;
         for (Player player : getServer().getOnlinePlayers()) {
-            String itemId = itemIdOf(player.getInventory().getItemInMainHand());
-            if (itemId == null) continue;
-            List<TimerEntry> entries = current.timers().get(itemId);
-            if (entries == null) continue;
-            for (TimerEntry entry : entries) {
-                if (tick % entry.interval() == 0L) api.runSkill(entry.skill(), player);
-            }
+            player.getScheduler().run(this, task -> runTimersFor(current, player, now), null);
+        }
+    }
+
+    private void runTimersFor(Snapshot current, Player player, long now) {
+        String itemId = itemIdOf(player.getInventory().getItemInMainHand());
+        if (itemId == null) return;
+        List<TimerEntry> entries = current.timers().get(itemId);
+        if (entries == null) return;
+        for (TimerEntry entry : entries) {
+            if (now % entry.interval() == 0L) api.runSkill(entry.skill(), player);
         }
     }
 

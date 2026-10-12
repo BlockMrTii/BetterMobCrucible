@@ -81,6 +81,7 @@ BetterMob's `/bettermob give`.
 -
 <a href="https://www.minecraft.net/en-us/download/server"><img src="https://img.shields.io/badge/minecraft-1.21.X-8FCA5C?style=for-the-badge" alt="mcversion"></a>
 <a href="https://adoptium.net/"><img src="https://img.shields.io/badge/java-21%2B-ED8B00?style=for-the-badge" alt="Java 21+"></a>
+<a href="https://papermc.io/downloads/folia"><img src="https://img.shields.io/badge/folia-%E2%9C%94-blue?style=for-the-badge" alt="folia"></a>
 <a href="https://github.com/HyperGaming99/bettermob"><img src="https://img.shields.io/badge/bettermob-1.1.8%2B-blue?style=for-the-badge" alt="BetterMob 1.1.8+"></a>
 
 🔨 Building
