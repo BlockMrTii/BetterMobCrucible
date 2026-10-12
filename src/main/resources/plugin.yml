@@ -3,12 +3,12 @@ version: 1.0.0
 main: dev.leon.bettermobcrucible.BetterMobCrucible
 api-version: '1.21'
 author: leon
-description: Item skills for BetterMob.
+description: Extra item triggers and mechanics for BetterMob.
 depend:
   - BetterMob
 commands:
   bettermobcrucible:
-    description: Give items, list them, reload and debug item skills.
+    description: List, reload and debug extra item triggers.
     aliases: [bmc]
     permission: bettermobcrucible.admin
 permissions:

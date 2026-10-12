@@ -2,6 +2,7 @@ package dev.leon.bettermobcrucible;
 
 import eu.northsoft.bettermob.api.BetterMobAPI;
 import eu.northsoft.bettermob.api.MechanicContext;
+import eu.northsoft.bettermob.api.PlaceholderContext;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -18,7 +19,6 @@ import java.util.stream.Stream;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
-import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -36,93 +36,89 @@ import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.components.CustomModelDataComponent;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * Item-Skills fuer BetterMob: Items werden in {@code items/*.yml} definiert und loesen
- * ueber {@code ~onUse}, {@code ~onSwing}, ... BetterMob-Skills aus.
+ * Zusatz-Trigger fuer BetterMob-Items: BetterMob liest die Items ({@code items/*.yml}) und
+ * kennt {@code ~onUse}; dieses Plugin ergaenzt {@code ~onSwing}, {@code ~onPressF},
+ * {@code ~onEquip}, {@code ~onPickup}, {@code ~onDrop} und {@code ~onTimer:<ticks>}.
  */
 public final class BetterMobCrucible extends JavaPlugin implements Listener {
     private static final Pattern TRIGGER = Pattern.compile("\\s*~on([A-Za-z]+)(?::(\\d+))?\\s*$");
     private static final String PACK_NAME = "BetterMobCrucible";
+    /** Wird von BetterMob selbst ausgefuehrt. */
+    private static final String NATIVE_TRIGGER = "use";
     private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacyAmpersand();
 
-    private final Map<String, ItemDefinition> items = new LinkedHashMap<>();
     private final Map<String, Map<String, String>> dispatch = new HashMap<>();
     private final Map<String, List<String>> timerSkills = new HashMap<>();
     private final Map<String, Integer> intervals = new HashMap<>();
     private long tick;
-
-    record ItemDefinition(String id, Material material, String display, List<String> lore, int modelData,
-                          List<String> skills) {}
+    private Plugin betterMob;
 
     @Override
     public void onEnable() {
+        betterMob = getServer().getPluginManager().getPlugin("BetterMob");
         getServer().getPluginManager().registerEvents(this, this);
-        saveDefaultItems();
 
         BetterMobAPI api = BetterMobAPI.get();
         api.registerMechanic(this, "setitemnbt", this::setItemNbt);
         api.registerMechanic(this, "setlore", this::setLore);
+        try {
+            api.registerPlaceholder(this, "itemnbt", this::nbtPlaceholder);
+            api.registerPlaceholder(this, "item", this::itemPlaceholder);
+        } catch (LinkageError e) {
+            getLogger().warning("Diese BetterMob-Version hat keine Platzhalter-API - <itemnbt.key> ist aus. (" + e + ")");
+        }
 
         getServer().getScheduler().runTask(this, this::rebuild);
         getServer().getScheduler().runTaskTimer(this, this::runTimers, 1L, 1L);
     }
 
-    @Override
-    public void onDisable() {
-        // Mechanics raeumt BetterMob selbst beim Deaktivieren dieses Plugins weg.
-    }
-
-    NamespacedKey itemKey() {
-        return new NamespacedKey(this, "item_id");
+    NamespacedKey bettermobItemKey() {
+        return new NamespacedKey(betterMob, "item_id");
     }
 
     NamespacedKey nbtKey(String key) {
         return new NamespacedKey(this, "nbt/" + key.toLowerCase(Locale.ROOT));
     }
 
-    private void saveDefaultItems() {
-        File folder = new File(getDataFolder(), "items");
-        if (!folder.exists()) {
-            folder.mkdirs();
-            saveResource("items/example.yml", false);
-        }
-    }
-
     // ---- Laden ------------------------------------------------------------------------
 
-    /** Items einlesen, Skills als Pack in BetterMob ablegen und BetterMob neu laden, falls sich etwas geaendert hat. */
+    /** Item-Dateien von BetterMob lesen, Skills als Pack in BetterMob ablegen und BetterMob bei Aenderung neu laden. */
     private void rebuild() {
-        items.clear();
         dispatch.clear();
         timerSkills.clear();
         intervals.clear();
 
         YamlConfiguration generated = new YamlConfiguration();
         int registered = 0;
-        for (File file : itemFiles(new File(getDataFolder(), "items"))) {
+        int items = 0;
+        for (File file : itemFiles()) {
             YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
             for (String itemId : yaml.getKeys(false)) {
                 ConfigurationSection section = yaml.getConfigurationSection(itemId);
-                if (section == null) continue;
-                ItemDefinition item = parseItem(itemId, section);
-                if (item == null) continue;
-                items.put(itemId.toLowerCase(Locale.ROOT), item);
+                if (section == null || !section.contains("Id")) continue;
+                String key = itemId.toLowerCase(Locale.ROOT);
+                if (dispatch.containsKey(key) || timerSkills.containsKey(key)) continue;
 
-                for (Map.Entry<String, List<String>> group : groupByTrigger(item.skills()).entrySet()) {
+                Map<String, List<String>> groups = groupByTrigger(section.getStringList("Skills"));
+                groups.remove(NATIVE_TRIGGER);
+                if (groups.isEmpty()) continue;
+                items++;
+                for (Map.Entry<String, List<String>> group : groups.entrySet()) {
                     String trigger = group.getKey();
                     String skillName = skillName(itemId, trigger);
                     generated.set(skillName + ".Skills", group.getValue());
                     if (trigger.startsWith("timer:")) {
                         intervals.put(skillName, Integer.parseInt(trigger.substring("timer:".length())));
-                        timerSkills.computeIfAbsent(item.id().toLowerCase(Locale.ROOT), k -> new ArrayList<>()).add(skillName);
+                        timerSkills.computeIfAbsent(key, k -> new ArrayList<>()).add(skillName);
                     } else {
-                        dispatch.computeIfAbsent(item.id().toLowerCase(Locale.ROOT), k -> new HashMap<>()).put(trigger, skillName);
+                        dispatch.computeIfAbsent(key, k -> new HashMap<>()).put(trigger, skillName);
                     }
                     registered++;
                 }
@@ -130,18 +126,38 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         }
 
         syncSkillPack(generated);
-        getLogger().info(items.size() + " Items mit " + registered + " Skill-Trigger(n) geladen.");
+        getLogger().info(registered + " Item-Trigger fuer " + items + " Items geladen.");
     }
 
-    private ItemDefinition parseItem(String id, ConfigurationSection section) {
-        String materialName = section.getString("Material", section.getString("Id", "STONE"));
-        Material material = Material.matchMaterial(materialName);
-        if (material == null || material.isAir()) {
-            getLogger().warning("Item '" + id + "': Material '" + materialName + "' ist unbekannt - uebersprungen.");
-            return null;
+    /** BetterMobs {@code items/} und die {@code Items/}-Ordner aller aktiven Packs. */
+    private List<File> itemFiles() {
+        File root = betterMob.getDataFolder();
+        List<File> folders = new ArrayList<>();
+        folders.add(new File(root, "items"));
+
+        List<String> disabled = betterMob.getConfig().getStringList("DisabledPacks").stream()
+                .map(v -> v.toLowerCase(Locale.ROOT)).toList();
+        File[] packs = new File(root, "packs").listFiles(File::isDirectory);
+        if (packs != null) {
+            for (File pack : packs) {
+                if (pack.getName().equalsIgnoreCase(PACK_NAME)) continue;
+                if (disabled.contains(pack.getName().toLowerCase(Locale.ROOT))) continue;
+                File[] children = pack.listFiles(File::isDirectory);
+                if (children == null) continue;
+                for (File child : children) if (child.getName().equalsIgnoreCase("items")) folders.add(child);
+            }
         }
-        return new ItemDefinition(id, material, section.getString("Display", ""), section.getStringList("Lore"),
-                section.getInt("Model", 0), section.getStringList("Skills"));
+
+        List<File> found = new ArrayList<>();
+        for (File folder : folders) {
+            if (!folder.isDirectory()) continue;
+            try (Stream<Path> paths = Files.walk(folder.toPath())) {
+                paths.filter(p -> p.toString().toLowerCase(Locale.ROOT).endsWith(".yml")).forEach(p -> found.add(p.toFile()));
+            } catch (IOException e) {
+                getLogger().warning("Konnte " + folder + " nicht lesen: " + e.getMessage());
+            }
+        }
+        return found;
     }
 
     /**
@@ -150,8 +166,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
      * laden wir BetterMob neu.
      */
     private void syncSkillPack(YamlConfiguration generated) {
-        File betterMobFolder = getServer().getPluginManager().getPlugin("BetterMob").getDataFolder();
-        File target = new File(betterMobFolder, "packs/" + PACK_NAME + "/skills/items.yml");
+        File target = new File(betterMob.getDataFolder(), "packs/" + PACK_NAME + "/skills/items.yml");
         String content = generated.saveToString();
         try {
             if (target.isFile() && Files.readString(target.toPath()).equals(content)) return;
@@ -182,42 +197,12 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         return byTrigger;
     }
 
-    private List<File> itemFiles(File root) {
-        List<File> found = new ArrayList<>();
-        try (Stream<Path> paths = Files.walk(root.toPath())) {
-            paths.filter(p -> p.toString().endsWith(".yml")).forEach(p -> found.add(p.toFile()));
-        } catch (IOException e) {
-            getLogger().warning("Konnte " + root + " nicht lesen: " + e.getMessage());
-        }
-        return found;
-    }
-
     // ---- Items ------------------------------------------------------------------------
 
-    ItemStack create(ItemDefinition item) {
-        ItemStack stack = new ItemStack(item.material());
-        ItemMeta meta = stack.getItemMeta();
-        if (!item.display().isEmpty()) {
-            meta.displayName(LEGACY.deserialize(item.display()).decoration(TextDecoration.ITALIC, false));
-        }
-        if (!item.lore().isEmpty()) {
-            List<Component> lore = new ArrayList<>();
-            for (String line : item.lore()) lore.add(LEGACY.deserialize(line).decoration(TextDecoration.ITALIC, false));
-            meta.lore(lore);
-        }
-        if (item.modelData() != 0) {
-            CustomModelDataComponent cmd = meta.getCustomModelDataComponent();
-            cmd.setFloats(List.of((float) item.modelData()));
-            meta.setCustomModelDataComponent(cmd);
-        }
-        meta.getPersistentDataContainer().set(itemKey(), PersistentDataType.STRING, item.id());
-        stack.setItemMeta(meta);
-        return stack;
-    }
-
+    /** BetterMob-Item-ID (klein geschrieben) oder null, wenn der Stack kein BetterMob-Item ist. */
     String itemIdOf(ItemStack stack) {
         if (stack == null || stack.getType().isAir() || !stack.hasItemMeta()) return null;
-        String id = stack.getItemMeta().getPersistentDataContainer().get(itemKey(), PersistentDataType.STRING);
+        String id = stack.getItemMeta().getPersistentDataContainer().get(bettermobItemKey(), PersistentDataType.STRING);
         return id == null ? null : id.toLowerCase(Locale.ROOT);
     }
 
@@ -237,7 +222,6 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         if (event.getHand() != EquipmentSlot.HAND) return;
         ItemStack held = event.getPlayer().getInventory().getItemInMainHand();
         switch (event.getAction()) {
-            case RIGHT_CLICK_AIR, RIGHT_CLICK_BLOCK -> fire(event.getPlayer(), held, "use");
             case LEFT_CLICK_AIR, LEFT_CLICK_BLOCK -> fire(event.getPlayer(), held, "swing");
             default -> { }
         }
@@ -337,44 +321,57 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         target.getEquipment().setItemInMainHand(held);
     }
 
+    private String nbtOf(LivingEntity entity, String key) {
+        ItemStack held = mainHand(entity);
+        if (entity == null || held == null || key == null || key.isEmpty() || !held.hasItemMeta()) return "";
+        String value = held.getItemMeta().getPersistentDataContainer().get(nbtKey(key), PersistentDataType.STRING);
+        return value == null ? "" : value;
+    }
+
+    /** {@code <itemnbt.key>} - gespeicherter Wert aus dem gehaltenen Item des Casters. */
+    private String nbtPlaceholder(String key, PlaceholderContext ctx) {
+        return nbtOf(ctx.caster(), key);
+    }
+
+    /** {@code <item.nbt.key>} und {@code <item.id>} fuer das gehaltene Item des Casters. */
+    private String itemPlaceholder(String key, PlaceholderContext ctx) {
+        if (key == null) return null;
+        if (key.equalsIgnoreCase("id")) {
+            String id = ctx.caster() == null ? null : itemIdOf(mainHand(ctx.caster()));
+            return id == null ? "" : id;
+        }
+        if (key.regionMatches(true, 0, "nbt.", 0, 4)) return nbtOf(ctx.caster(), key.substring(4));
+        return null;
+    }
+
     // ---- Befehl -----------------------------------------------------------------------
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         String sub = args.length == 0 ? "help" : args[0].toLowerCase(Locale.ROOT);
         switch (sub) {
-            case "list" -> sender.sendMessage("Items: " + String.join(", ", items.keySet()));
+            case "list" -> {
+                sender.sendMessage("Item triggers: " + dispatch);
+                sender.sendMessage("Timer skills: " + timerSkills + " " + intervals);
+            }
             case "reload" -> {
                 rebuild();
-                sender.sendMessage("BetterMobCrucible neu geladen.");
-            }
-            case "give" -> {
-                if (args.length < 2) {
-                    sender.sendMessage("/" + label + " give <item> [spieler]");
-                    return true;
-                }
-                ItemDefinition item = items.get(args[1].toLowerCase(Locale.ROOT));
-                Player target = args.length > 2 ? getServer().getPlayer(args[2]) : sender instanceof Player p ? p : null;
-                if (item == null) sender.sendMessage("Unbekanntes Item: " + args[1]);
-                else if (target == null) sender.sendMessage("Spieler nicht gefunden.");
-                else target.getInventory().addItem(create(item));
+                sender.sendMessage("BetterMobCrucible reloaded.");
             }
             case "debug" -> debug(sender);
-            default -> sender.sendMessage("/" + label + " <give|list|reload|debug>");
+            default -> sender.sendMessage("/" + label + " <list|reload|debug>  (items: /bettermob give)");
         }
         return true;
     }
 
     private void debug(CommandSender sender) {
-        sender.sendMessage("Item skill triggers: " + dispatch);
-        sender.sendMessage("Timer skills: " + timerSkills + " " + intervals);
         if (!(sender instanceof Player player)) return;
         ItemStack held = player.getInventory().getItemInMainHand();
         if (held.getType().isAir()) {
             sender.sendMessage("Nothing in your main hand.");
             return;
         }
-        sender.sendMessage("Crucible item: " + itemIdOf(held));
+        sender.sendMessage("BetterMob item: " + itemIdOf(held));
         if (held.hasItemMeta()) {
             PersistentDataContainer pdc = held.getItemMeta().getPersistentDataContainer();
             for (NamespacedKey key : pdc.getKeys()) {
