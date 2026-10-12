@@ -9,10 +9,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -41,6 +44,7 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitTask;
 
 /**
  * Zusatz-Trigger fuer BetterMob-Items: BetterMob liest die Items ({@code items/*.yml}) und
@@ -54,18 +58,29 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
     private static final String NATIVE_TRIGGER = "use";
     private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacyAmpersand();
 
-    private final Map<String, Map<String, String>> dispatch = new HashMap<>();
-    private final Map<String, List<String>> timerSkills = new HashMap<>();
-    private final Map<String, Integer> intervals = new HashMap<>();
+    private record TimerEntry(String skill, int interval) {}
+
+    /** Unveraenderlicher Stand nach einem Reload: wird in einem Schritt getauscht, nie halb befuellt gelesen. */
+    private record Snapshot(Map<String, Map<String, String>> dispatch, Map<String, List<TimerEntry>> timers,
+                            Set<String> triggers, int timerPeriod) {
+        static final Snapshot EMPTY = new Snapshot(Map.of(), Map.of(), Set.of(), 0);
+    }
+
+    private final Map<String, NamespacedKey> nbtKeys = new ConcurrentHashMap<>();
+    private volatile Snapshot snapshot = Snapshot.EMPTY;
+    private BukkitTask timerTask;
     private long tick;
     private Plugin betterMob;
+    private BetterMobAPI api;
+    private NamespacedKey itemKey;
 
     @Override
     public void onEnable() {
         betterMob = getServer().getPluginManager().getPlugin("BetterMob");
         getServer().getPluginManager().registerEvents(this, this);
 
-        BetterMobAPI api = BetterMobAPI.get();
+        api = BetterMobAPI.get();
+        itemKey = new NamespacedKey(betterMob, "item_id");
         api.registerMechanic(this, "setitemnbt", this::setItemNbt);
         api.registerMechanic(this, "setlore", this::setLore);
         try {
@@ -76,24 +91,20 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         }
 
         getServer().getScheduler().runTask(this, this::rebuild);
-        getServer().getScheduler().runTaskTimer(this, this::runTimers, 1L, 1L);
-    }
-
-    NamespacedKey bettermobItemKey() {
-        return new NamespacedKey(betterMob, "item_id");
     }
 
     NamespacedKey nbtKey(String key) {
-        return new NamespacedKey(this, "nbt/" + key.toLowerCase(Locale.ROOT));
+        return nbtKeys.computeIfAbsent(key.toLowerCase(Locale.ROOT), k -> new NamespacedKey(this, "nbt/" + k));
     }
 
     // ---- Laden ------------------------------------------------------------------------
 
     /** Item-Dateien von BetterMob lesen, Skills als Pack in BetterMob ablegen und BetterMob bei Aenderung neu laden. */
     private void rebuild() {
-        dispatch.clear();
-        timerSkills.clear();
-        intervals.clear();
+        Map<String, Map<String, String>> dispatch = new HashMap<>();
+        Map<String, List<TimerEntry>> timers = new HashMap<>();
+        Set<String> triggers = new HashSet<>();
+        int period = 0;
 
         YamlConfiguration generated = new YamlConfiguration();
         int registered = 0;
@@ -104,7 +115,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
                 ConfigurationSection section = yaml.getConfigurationSection(itemId);
                 if (section == null || !section.contains("Id")) continue;
                 String key = itemId.toLowerCase(Locale.ROOT);
-                if (dispatch.containsKey(key) || timerSkills.containsKey(key)) continue;
+                if (dispatch.containsKey(key) || timers.containsKey(key)) continue;
 
                 Map<String, List<String>> groups = groupByTrigger(section.getStringList("Skills"));
                 groups.remove(NATIVE_TRIGGER);
@@ -115,18 +126,42 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
                     String skillName = skillName(itemId, trigger);
                     generated.set(skillName + ".Skills", group.getValue());
                     if (trigger.startsWith("timer:")) {
-                        intervals.put(skillName, Integer.parseInt(trigger.substring("timer:".length())));
-                        timerSkills.computeIfAbsent(key, k -> new ArrayList<>()).add(skillName);
+                        int interval = parseInterval(trigger.substring("timer:".length()));
+                        timers.computeIfAbsent(key, k -> new ArrayList<>()).add(new TimerEntry(skillName, interval));
+                        period = period == 0 ? interval : gcd(period, interval);
                     } else {
                         dispatch.computeIfAbsent(key, k -> new HashMap<>()).put(trigger, skillName);
+                        triggers.add(trigger);
                     }
                     registered++;
                 }
             }
         }
 
+        snapshot = new Snapshot(dispatch, timers, triggers, period);
+        scheduleTimer(period);
         syncSkillPack(generated);
         getLogger().info(registered + " Item-Trigger fuer " + items + " Items geladen.");
+    }
+
+    private static int parseInterval(String raw) {
+        try {
+            return Math.max(1, Integer.parseInt(raw));
+        } catch (NumberFormatException e) {
+            return 20;
+        }
+    }
+
+    private static int gcd(int a, int b) {
+        return b == 0 ? a : gcd(b, a % b);
+    }
+
+    /** Ein einziger Timer im ggT aller Intervalle statt jeden Tick; ohne Timer-Items laeuft gar keiner. */
+    private void scheduleTimer(int period) {
+        if (timerTask != null) timerTask.cancel();
+        timerTask = null;
+        tick = 0;
+        if (period > 0) timerTask = getServer().getScheduler().runTaskTimer(this, this::runTimers, period, period);
     }
 
     /** BetterMobs {@code items/} und die {@code Items/}-Ordner aller aktiven Packs. */
@@ -176,7 +211,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
             getLogger().warning("Konnte " + target + " nicht schreiben: " + e.getMessage());
             return;
         }
-        BetterMobAPI.get().reload();
+        api.reload();
         getLogger().info("Item-Skills in BetterMob aktualisiert.");
     }
 
@@ -202,24 +237,29 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
     /** BetterMob-Item-ID (klein geschrieben) oder null, wenn der Stack kein BetterMob-Item ist. */
     String itemIdOf(ItemStack stack) {
         if (stack == null || stack.getType().isAir() || !stack.hasItemMeta()) return null;
-        String id = stack.getItemMeta().getPersistentDataContainer().get(bettermobItemKey(), PersistentDataType.STRING);
+        String id = stack.getItemMeta().getPersistentDataContainer().get(itemKey, PersistentDataType.STRING);
         return id == null ? null : id.toLowerCase(Locale.ROOT);
     }
 
     // ---- Trigger ----------------------------------------------------------------------
 
     private void fire(Player player, ItemStack stack, String trigger) {
-        String itemId = itemIdOf(stack);
+        Snapshot current = snapshot;
+        if (!current.triggers().contains(trigger)) return;
+        fire(current, player, itemIdOf(stack), trigger);
+    }
+
+    private void fire(Snapshot current, Player player, String itemId, String trigger) {
         if (itemId == null) return;
-        Map<String, String> triggers = dispatch.get(itemId);
-        if (triggers == null) return;
-        String skill = triggers.get(trigger);
-        if (skill != null) BetterMobAPI.get().runSkill(skill, player);
+        Map<String, String> byTrigger = current.dispatch().get(itemId);
+        if (byTrigger == null) return;
+        String skill = byTrigger.get(trigger);
+        if (skill != null) api.runSkill(skill, player);
     }
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (event.getHand() != EquipmentSlot.HAND) return;
+        if (event.getHand() != EquipmentSlot.HAND || !snapshot.triggers().contains("swing")) return;
         ItemStack held = event.getPlayer().getInventory().getItemInMainHand();
         switch (event.getAction()) {
             case LEFT_CLICK_AIR, LEFT_CLICK_BLOCK -> fire(event.getPlayer(), held, "swing");
@@ -229,11 +269,12 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onSwapHands(PlayerSwapHandItemsEvent event) {
-        ItemStack toOffHand = event.getOffHandItem();
-        ItemStack toMainHand = event.getMainHandItem();
-        fire(event.getPlayer(), toOffHand, "pressf");
-        String off = itemIdOf(toOffHand);
-        if (off == null || !off.equals(itemIdOf(toMainHand))) fire(event.getPlayer(), toMainHand, "pressf");
+        Snapshot current = snapshot;
+        if (!current.triggers().contains("pressf")) return;
+        String off = itemIdOf(event.getOffHandItem());
+        String main = itemIdOf(event.getMainHandItem());
+        fire(current, event.getPlayer(), off, "pressf");
+        if (main != null && !main.equals(off)) fire(current, event.getPlayer(), main, "pressf");
     }
 
     @EventHandler
@@ -243,30 +284,32 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onPickup(EntityPickupItemEvent event) {
-        if (event.getEntity() instanceof Player player) {
-            ItemStack stack = event.getItem().getItemStack();
-            fire(player, stack, "pickup");
-            fire(player, stack, "itempickup");
-        }
+        Snapshot current = snapshot;
+        if (current.triggers().isEmpty() || !(event.getEntity() instanceof Player player)) return;
+        String id = itemIdOf(event.getItem().getItemStack());
+        fire(current, player, id, "pickup");
+        fire(current, player, id, "itempickup");
     }
 
     @EventHandler
     public void onDrop(PlayerDropItemEvent event) {
-        ItemStack stack = event.getItemDrop().getItemStack();
-        fire(event.getPlayer(), stack, "drop");
-        fire(event.getPlayer(), stack, "itemdrop");
+        Snapshot current = snapshot;
+        if (current.triggers().isEmpty()) return;
+        String id = itemIdOf(event.getItemDrop().getItemStack());
+        fire(current, event.getPlayer(), id, "drop");
+        fire(current, event.getPlayer(), id, "itemdrop");
     }
 
     private void runTimers() {
-        tick++;
-        if (timerSkills.isEmpty()) return;
+        Snapshot current = snapshot;
+        tick += current.timerPeriod();
         for (Player player : getServer().getOnlinePlayers()) {
             String itemId = itemIdOf(player.getInventory().getItemInMainHand());
             if (itemId == null) continue;
-            List<String> skills = timerSkills.get(itemId);
-            if (skills == null) continue;
-            for (String skill : skills) {
-                if (tick % intervals.get(skill) == 0L) BetterMobAPI.get().runSkill(skill, player);
+            List<TimerEntry> entries = current.timers().get(itemId);
+            if (entries == null) continue;
+            for (TimerEntry entry : entries) {
+                if (tick % entry.interval() == 0L) api.runSkill(entry.skill(), player);
             }
         }
     }
@@ -351,8 +394,8 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         String sub = args.length == 0 ? "help" : args[0].toLowerCase(Locale.ROOT);
         switch (sub) {
             case "list" -> {
-                sender.sendMessage("Item triggers: " + dispatch);
-                sender.sendMessage("Timer skills: " + timerSkills + " " + intervals);
+                sender.sendMessage("Item triggers: " + snapshot.dispatch());
+                sender.sendMessage("Timer skills: " + snapshot.timers());
             }
             case "reload" -> {
                 rebuild();
