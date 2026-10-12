@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest a new trigger, mechanic or placeholder
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What do you want to be able to do?
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: How should it look in an item's `Skills:` list?
+      placeholder: "- mymechanic{key=value} @self ~onSwing"
+      render: yaml
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you tried

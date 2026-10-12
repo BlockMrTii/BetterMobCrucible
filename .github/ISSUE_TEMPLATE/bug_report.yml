@@ -1,0 +1,48 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Item definition (paste the YAML)
+        2. What you did in-game
+        3. What you saw
+    validations:
+      required: true
+  - type: input
+    id: crucible-version
+    attributes:
+      label: BetterMobCrucible version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: bettermob-version
+    attributes:
+      label: BetterMob version
+      placeholder: "1.1.8"
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Server software and version
+      placeholder: Paper 1.21.11
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console log / errors
+      description: Paste relevant log lines or a stack trace.
+      render: text
