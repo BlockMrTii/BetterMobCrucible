@@ -1,4 +1,4 @@
-<!-- Banner hier einfuegen: ![banner](banner.png) -->
+<p align="center"><img src="assets/icon.png" alt="BetterMobCrucible" width="256"></p>
 
 ---
 
