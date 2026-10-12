@@ -1,6 +1,6 @@
 # BetterMobCrucible
 
-Paper plugin by Leon: item skills for [BetterMob](https://github.com/HyperGaming99/bettermob).
+Paper plugin by HyperGaming: item skills for [BetterMob](https://github.com/HyperGaming99/bettermob).
 Define items in YAML and let them trigger BetterMob skills.
 
 ## Requirements
