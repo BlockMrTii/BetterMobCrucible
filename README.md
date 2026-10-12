@@ -1,56 +1,102 @@
-# BetterMobCrucible
+<!-- Banner hier einfuegen: ![banner](banner.png) -->
 
-Paper plugin by HyperGaming: item skills for [BetterMob](https://github.com/HyperGaming99/bettermob).
-Define items in YAML and let them trigger BetterMob skills.
+---
 
-## Requirements
+<center>
+<a href="https://github.com/HyperGaming99/BetterMobCrucible/releases/latest"><img alt="github" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/available/github_vector.svg"></a>
+</center>
 
-- Paper 1.21+, Java 21
-- [BetterMob](https://github.com/HyperGaming99/bettermob) 1.1.8 or newer (dev-build for placeholders)
+---
 
-## Items
+✨ What is BetterMobCrucible?
+--
 
-Items are defined in BetterMob (`plugins/BetterMob/items/*.yml` and each pack's `Items/`), see the BetterMob wiki.
-BetterMob handles `~onUse`; BetterMobCrucible adds more triggers to the same `Skills:` lists:
+BetterMobCrucible is an addon for [BetterMob](https://github.com/HyperGaming99/bettermob) that
+gives your custom items more ways to trigger skills. BetterMob already runs `~onUse`; this plugin
+adds swinging, swapping hands, equipping, picking up, dropping and timers, plus a few
+item mechanics and placeholders.
+
+It was built so that item content made for MythicCrucible-style plugins can run on BetterMob.
+If you know that file format, you already know this one.
+
+- 🗡️ **More item triggers**: `~onSwing`, `~onPressF`, `~onEquip`, `~onPickup`, `~onDrop` and
+  `~onTimer:<ticks>` in the same `Skills:` lists BetterMob already reads.
+- 🏷️ **Item data**: store values on items with `setitemnbt` and read them back anywhere with
+  `<itemnbt.key>`.
+- 📜 **Lore on the fly**: rewrite an item's lore from a skill with `setlore`.
+- ⚡ **Lightweight**: one timer for all items, and events exit early when no item uses the trigger.
+- 🔌 **Built on the BetterMob API**: no MythicMobs needed.
+
+## 🚀 Quick example
 
 ```yaml
+# plugins/BetterMob/items/wand.yml
 example_wand:
   Id: STICK
   Display: '&bExample Wand'
+  Lore:
+    - '&7Swing to count'
   Skills:
     - sound{s=entity.experience_orb.pickup} @self ~onUse
     - setitemnbt{key=swings;value=1} @self ~onSwing
+    - setlore{lore=&7Swings: <itemnbt.swings>} @self ~onSwing
 ```
 
-Extra triggers: `~onSwing`, `~onPressF`, `~onEquip`, `~onPickup`, `~onDrop`, `~onTimer:<ticks>`
-(timer runs while the item is in the main hand). BetterMob may log these lines as invalid when it
-loads items; that is harmless. They are written as skills into
-`plugins/BetterMob/packs/BetterMobCrucible/skills/items.yml`, and BetterMob is reloaded when they change.
-Run `/bmc reload` after editing item files.
+```
+/bettermob give example_wand
+/bmc reload
+```
 
-## Mechanics (registered in BetterMob)
+📋 Triggers, mechanics and placeholders
+-
 
-- `setitemnbt{key=..;value=..}`
-- `setlore{lore=line 1|&aline 2}`
+| Type | Name | Description |
+|---|---|---|
+| Trigger | `~onSwing` | Left click with the item in the main hand |
+| Trigger | `~onPressF` | Item is swapped between hands |
+| Trigger | `~onEquip` | Item is selected in the hotbar |
+| Trigger | `~onPickup` / `~onDrop` | Item is picked up or dropped |
+| Trigger | `~onTimer:<ticks>` | Repeats while the item is in the main hand |
+| Mechanic | `setitemnbt{key=..;value=..}` | Stores a string on the held item |
+| Mechanic | `setlore{lore=line 1\|line 2}` | Replaces the held item's lore |
+| Placeholder | `<itemnbt.key>`, `<item.nbt.key>`, `<item.id>` | Needs a BetterMob build with the placeholder API |
 
-Placeholders (needs a BetterMob build with the placeholder API): `<itemnbt.key>`, `<item.nbt.key>`, `<item.id>`.
+`~onUse` stays with BetterMob. BetterMob may log the extra triggers as invalid lines when it loads
+items; that is harmless. They are written as skills into
+`plugins/BetterMob/packs/BetterMobCrucible/skills/items.yml`, and BetterMob reloads when they change.
 
-## Commands
+⌨️ Commands
+-
 
-`/bettermobcrucible <list|reload|debug>` (alias `/bmc`, permission `bettermobcrucible.admin`)
+| Command | Description |
+|---|---|
+| `/bettermobcrucible list` | Show the registered item triggers |
+| `/bettermobcrucible reload` | Re-read the item files |
+| `/bettermobcrucible debug` | Show the held item's BetterMob ID and stored data |
 
-## Build
+Alias: `/bmc`. Permission: `bettermobcrucible.admin` (default: op). Items are handed out with
+BetterMob's `/bettermob give`.
+
+🏗️ Supported environment
+-
+<a href="https://www.minecraft.net/en-us/download/server"><img src="https://img.shields.io/badge/minecraft-1.21.X-8FCA5C?style=for-the-badge" alt="mcversion"></a>
+<a href="https://adoptium.net/"><img src="https://img.shields.io/badge/java-21%2B-ED8B00?style=for-the-badge" alt="Java 21+"></a>
+<a href="https://github.com/HyperGaming99/bettermob"><img src="https://img.shields.io/badge/bettermob-1.1.8%2B-blue?style=for-the-badge" alt="BetterMob 1.1.8+"></a>
+
+🔨 Building
+-
 
 JDK 21:
 
-    mvn package
+```
+mvn package
+```
 
 The BetterMob API classes under `src/main/java/eu/northsoft/bettermob/api` are a compile-only copy
 (excluded from the jar, BetterMob provides them at runtime). Update them when the BetterMob API changes.
+CI builds on every push to `main` and creates or updates the release `v<version>`.
 
-CI (`.github/workflows/build.yml`) builds on every push to `main` and creates or updates the
-release `v<version>`.
-
-## License
+📄 License
+-
 
 [MIT](LICENSE)
