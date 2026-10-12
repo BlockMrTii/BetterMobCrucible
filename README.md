@@ -6,7 +6,7 @@ Define items in YAML and let them trigger BetterMob skills.
 ## Requirements
 
 - Paper 1.21+, Java 21
-- BetterMob 1.1.8 or newer (dev-build for placeholders)
+- [BetterMob](https://github.com/HyperGaming99/bettermob) 1.1.8 or newer (dev-build for placeholders)
 
 ## Items
 
@@ -50,3 +50,7 @@ The BetterMob API classes under `src/main/java/eu/northsoft/bettermob/api` are a
 
 CI (`.github/workflows/build.yml`) builds on every push to `main` and creates or updates the
 release `v<version>`.
+
+## License
+
+[MIT](LICENSE)
