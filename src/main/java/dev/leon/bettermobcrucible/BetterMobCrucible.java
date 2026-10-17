@@ -84,6 +84,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         itemKey = new NamespacedKey(betterMob, "item_id");
         api.registerMechanic(this, "setitemnbt", this::setItemNbt);
         api.registerMechanic(this, "setlore", this::setLore);
+        registerTriggers();
         try {
             api.registerPlaceholder(this, "itemnbt", this::nbtPlaceholder);
             api.registerPlaceholder(this, "item", this::itemPlaceholder);
@@ -92,6 +93,17 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         }
 
         getServer().getGlobalRegionScheduler().run(this, task -> rebuild());
+    }
+
+    /** Meldet die Zusatz-Trigger bei BetterMob an (ab 1.1.9), damit beim Laden keine Warnungen mehr kommen. */
+    private void registerTriggers() {
+        try {
+            for (String trigger : List.of("swing", "pressf", "equip", "pickup", "itempickup", "drop", "itemdrop", "timer")) {
+                api.registerTrigger(this, trigger);
+            }
+        } catch (LinkageError e) {
+            getLogger().info("BetterMob kennt registerTrigger nicht (vor 1.1.9) - die Zusatz-Trigger loesen dort Lade-Warnungen aus, laufen aber.");
+        }
     }
 
     NamespacedKey nbtKey(String key) {
