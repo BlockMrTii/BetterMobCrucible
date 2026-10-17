@@ -61,8 +61,8 @@ example_wand:
 | Mechanic | `setlore{lore=line 1\|line 2}` | Replaces the held item's lore |
 | Placeholder | `<itemnbt.key>`, `<item.nbt.key>`, `<item.id>` | Needs a BetterMob build with the placeholder API |
 
-`~onUse` stays with BetterMob. BetterMob may log the extra triggers as invalid lines when it loads
-items; that is harmless. They are written as skills into
+`~onUse` stays with BetterMob. The extra triggers are registered in BetterMob (1.1.9 or newer), so
+the load stays silent; older versions log them as invalid lines, which is harmless. They are written as skills into
 `plugins/BetterMob/packs/BetterMobCrucible/skills/items.yml`, and BetterMob reloads when they change.
 
 ⌨️ Commands
