@@ -17,6 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -367,32 +368,40 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         return null;
     }
 
-    /** {@code setitemnbt{key=x;value=y}} - schreibt einen String-Wert ins gehaltene Item. */
-    private void setItemNbt(MechanicContext ctx) {
-        LivingEntity target = targetOf(ctx);
+    /** Aendert das gehaltene Item auf dem Thread, dem das Ziel gehoert (Folia: andere Region = Entity-Scheduler). */
+    private void changeHeldItem(LivingEntity target, Consumer<ItemMeta> change) {
+        if (Bukkit.isOwnedByCurrentRegion(target)) {
+            applyHeldItem(target, change);
+            return;
+        }
+        target.getScheduler().run(this, task -> applyHeldItem(target, change), null);
+    }
+
+    private void applyHeldItem(LivingEntity target, Consumer<ItemMeta> change) {
         ItemStack held = mainHand(target);
-        String key = param(ctx.params(), "key", "k");
-        if (held == null || key.isEmpty()) return;
+        if (held == null) return;
         ItemMeta meta = held.getItemMeta();
-        meta.getPersistentDataContainer().set(nbtKey(key), PersistentDataType.STRING, param(ctx.params(), "value", "val", "v"));
+        change.accept(meta);
         held.setItemMeta(meta);
         target.getEquipment().setItemInMainHand(held);
     }
 
+    /** {@code setitemnbt{key=x;value=y}} - schreibt einen String-Wert ins gehaltene Item. */
+    private void setItemNbt(MechanicContext ctx) {
+        String key = param(ctx.params(), "key", "k");
+        if (key.isEmpty()) return;
+        String value = param(ctx.params(), "value", "val", "v");
+        changeHeldItem(targetOf(ctx), meta -> meta.getPersistentDataContainer().set(nbtKey(key), PersistentDataType.STRING, value));
+    }
+
     /** {@code setlore{lore=Zeile 1|&aZeile 2}} - ersetzt die Lore des gehaltenen Items. */
     private void setLore(MechanicContext ctx) {
-        LivingEntity target = targetOf(ctx);
-        ItemStack held = mainHand(target);
         String raw = param(ctx.params(), "lore", "l");
-        if (held == null) return;
         List<Component> lore = new ArrayList<>();
         if (!raw.isEmpty()) {
             for (String line : raw.split("\\|")) lore.add(LEGACY.deserialize(line).decoration(TextDecoration.ITALIC, false));
         }
-        ItemMeta meta = held.getItemMeta();
-        meta.lore(lore);
-        held.setItemMeta(meta);
-        target.getEquipment().setItemInMainHand(held);
+        changeHeldItem(targetOf(ctx), meta -> meta.lore(lore));
     }
 
     private String nbtOf(LivingEntity entity, String key) {
