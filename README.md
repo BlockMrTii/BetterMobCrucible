@@ -95,7 +95,8 @@ mvn package
 ```
 
 The BetterMob API classes under `src/main/java/eu/northsoft/bettermob/api` are a compile-only copy
-(excluded from the jar, BetterMob provides them at runtime). Update them when the BetterMob API changes.
+(excluded from the jar, BetterMob provides them at runtime). CI replaces them with the API of BetterMob's
+`dev` branch before every build; locally run `.github/scripts/sync-bettermob-api.sh [ref]` to do the same.
 CI builds on every push to `main` and creates or updates the release `v<version>`.
 
 📄 License

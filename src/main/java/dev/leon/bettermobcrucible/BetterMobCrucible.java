@@ -1,8 +1,8 @@
 package dev.leon.bettermobcrucible;
 
 import eu.northsoft.bettermob.api.BetterMobAPI;
-import eu.northsoft.bettermob.api.MechanicContext;
-import eu.northsoft.bettermob.api.PlaceholderContext;
+import eu.northsoft.bettermob.api.custom.MechanicContext;
+import eu.northsoft.bettermob.api.custom.PlaceholderContext;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.io.File;
 import java.io.IOException;

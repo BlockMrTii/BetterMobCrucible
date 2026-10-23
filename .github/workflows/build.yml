@@ -40,6 +40,9 @@ jobs:
             echo
           } > "$RUNNER_TEMP/commits.md"
 
+      - name: Sync the BetterMob API from BetterMob's dev branch
+        run: .github/scripts/sync-bettermob-api.sh dev
+
       - name: Build
         run: mvn -B clean package
 
