@@ -1,8 +1,8 @@
 package dev.leon.bettermobcrucible;
 
 import eu.northsoft.bettermob.api.BetterMobAPI;
-import eu.northsoft.bettermob.api.MechanicContext;
-import eu.northsoft.bettermob.api.PlaceholderContext;
+import eu.northsoft.bettermob.api.custom.MechanicContext;
+import eu.northsoft.bettermob.api.custom.PlaceholderContext;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.io.File;
 import java.io.IOException;
@@ -17,12 +17,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -83,6 +85,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         itemKey = new NamespacedKey(betterMob, "item_id");
         api.registerMechanic(this, "setitemnbt", this::setItemNbt);
         api.registerMechanic(this, "setlore", this::setLore);
+        registerTriggers();
         try {
             api.registerPlaceholder(this, "itemnbt", this::nbtPlaceholder);
             api.registerPlaceholder(this, "item", this::itemPlaceholder);
@@ -93,6 +96,17 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         getServer().getGlobalRegionScheduler().run(this, task -> rebuild());
     }
 
+    /** Meldet die Zusatz-Trigger bei BetterMob an (ab 1.1.9), damit beim Laden keine Warnungen mehr kommen. */
+    private void registerTriggers() {
+        try {
+            for (String trigger : List.of("swing", "pressf", "equip", "pickup", "itempickup", "drop", "itemdrop", "timer")) {
+                api.registerTrigger(this, trigger);
+            }
+        } catch (LinkageError e) {
+            getLogger().info("BetterMob kennt registerTrigger nicht (vor 1.1.9) - die Zusatz-Trigger loesen dort Lade-Warnungen aus, laufen aber.");
+        }
+    }
+
     NamespacedKey nbtKey(String key) {
         return nbtKeys.computeIfAbsent(key.toLowerCase(Locale.ROOT), k -> new NamespacedKey(this, "nbt/" + k));
     }
@@ -101,6 +115,14 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
 
     /** Item-Dateien von BetterMob lesen, Skills als Pack in BetterMob ablegen und BetterMob bei Aenderung neu laden. */
     private void rebuild() {
+        startRebuild(null);
+    }
+
+    private void startRebuild(CommandSender sender) {
+        getServer().getAsyncScheduler().runNow(this, task -> load(sender));
+    }
+
+    private synchronized void load(CommandSender sender) {
         Map<String, Map<String, String>> dispatch = new HashMap<>();
         Map<String, List<TimerEntry>> timers = new HashMap<>();
         Set<String> triggers = new HashSet<>();
@@ -138,10 +160,20 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
             }
         }
 
-        snapshot = new Snapshot(dispatch, timers, triggers, period);
-        scheduleTimer(period);
-        syncSkillPack(generated);
+        Snapshot loaded = new Snapshot(dispatch, timers, triggers, period);
+        boolean skillsChanged = syncSkillPack(generated);
         getLogger().info(registered + " Item-Trigger fuer " + items + " Items geladen.");
+        getServer().getGlobalRegionScheduler().run(this, task -> apply(loaded, skillsChanged, sender));
+    }
+
+    private void apply(Snapshot loaded, boolean skillsChanged, CommandSender sender) {
+        snapshot = loaded;
+        scheduleTimer(loaded.timerPeriod());
+        if (skillsChanged) {
+            api.reload();
+            getLogger().info("Item-Skills in BetterMob aktualisiert.");
+        }
+        if (sender != null) sender.sendMessage("BetterMobCrucible reloaded.");
     }
 
     private static int parseInterval(String raw) {
@@ -195,24 +227,18 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         return found;
     }
 
-    /**
-     * BetterMob kennt nur Skills aus Dateien, daher schreiben wir die Item-Skills in einen
-     * eigenen Pack (packs/BetterMobCrucible/skills/items.yml). Aendert sich der Inhalt,
-     * laden wir BetterMob neu.
-     */
-    private void syncSkillPack(YamlConfiguration generated) {
+    private boolean syncSkillPack(YamlConfiguration generated) {
         File target = new File(betterMob.getDataFolder(), "packs/" + PACK_NAME + "/skills/items.yml");
         String content = generated.saveToString();
         try {
-            if (target.isFile() && Files.readString(target.toPath()).equals(content)) return;
+            if (target.isFile() && Files.readString(target.toPath()).equals(content)) return false;
             target.getParentFile().mkdirs();
             Files.writeString(target.toPath(), content);
+            return true;
         } catch (IOException e) {
             getLogger().warning("Konnte " + target + " nicht schreiben: " + e.getMessage());
-            return;
+            return false;
         }
-        api.reload();
-        getLogger().info("Item-Skills in BetterMob aktualisiert.");
     }
 
     static String skillName(String itemId, String trigger) {
@@ -335,39 +361,47 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
     }
 
     private static ItemStack mainHand(Entity entity) {
-        if (entity instanceof LivingEntity living && living.getEquipment() != null) {
+        if (entity instanceof LivingEntity living && Bukkit.isOwnedByCurrentRegion(living) && living.getEquipment() != null) {
             ItemStack held = living.getEquipment().getItemInMainHand();
             return held.getType().isAir() ? null : held;
         }
         return null;
     }
 
-    /** {@code setitemnbt{key=x;value=y}} - schreibt einen String-Wert ins gehaltene Item. */
-    private void setItemNbt(MechanicContext ctx) {
-        LivingEntity target = targetOf(ctx);
+    /** Aendert das gehaltene Item auf dem Thread, dem das Ziel gehoert (Folia: andere Region = Entity-Scheduler). */
+    private void changeHeldItem(LivingEntity target, Consumer<ItemMeta> change) {
+        if (Bukkit.isOwnedByCurrentRegion(target)) {
+            applyHeldItem(target, change);
+            return;
+        }
+        target.getScheduler().run(this, task -> applyHeldItem(target, change), null);
+    }
+
+    private void applyHeldItem(LivingEntity target, Consumer<ItemMeta> change) {
         ItemStack held = mainHand(target);
-        String key = param(ctx.params(), "key", "k");
-        if (held == null || key.isEmpty()) return;
+        if (held == null) return;
         ItemMeta meta = held.getItemMeta();
-        meta.getPersistentDataContainer().set(nbtKey(key), PersistentDataType.STRING, param(ctx.params(), "value", "val", "v"));
+        change.accept(meta);
         held.setItemMeta(meta);
         target.getEquipment().setItemInMainHand(held);
     }
 
+    /** {@code setitemnbt{key=x;value=y}} - schreibt einen String-Wert ins gehaltene Item. */
+    private void setItemNbt(MechanicContext ctx) {
+        String key = param(ctx.params(), "key", "k");
+        if (key.isEmpty()) return;
+        String value = param(ctx.params(), "value", "val", "v");
+        changeHeldItem(targetOf(ctx), meta -> meta.getPersistentDataContainer().set(nbtKey(key), PersistentDataType.STRING, value));
+    }
+
     /** {@code setlore{lore=Zeile 1|&aZeile 2}} - ersetzt die Lore des gehaltenen Items. */
     private void setLore(MechanicContext ctx) {
-        LivingEntity target = targetOf(ctx);
-        ItemStack held = mainHand(target);
         String raw = param(ctx.params(), "lore", "l");
-        if (held == null) return;
         List<Component> lore = new ArrayList<>();
         if (!raw.isEmpty()) {
             for (String line : raw.split("\\|")) lore.add(LEGACY.deserialize(line).decoration(TextDecoration.ITALIC, false));
         }
-        ItemMeta meta = held.getItemMeta();
-        meta.lore(lore);
-        held.setItemMeta(meta);
-        target.getEquipment().setItemInMainHand(held);
+        changeHeldItem(targetOf(ctx), meta -> meta.lore(lore));
     }
 
     private String nbtOf(LivingEntity entity, String key) {
@@ -403,10 +437,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
                 sender.sendMessage("Item triggers: " + snapshot.dispatch());
                 sender.sendMessage("Timer skills: " + snapshot.timers());
             }
-            case "reload" -> {
-                rebuild();
-                sender.sendMessage("BetterMobCrucible reloaded.");
-            }
+            case "reload" -> startRebuild(sender);
             case "debug" -> debug(sender);
             default -> sender.sendMessage("/" + label + " <list|reload|debug>  (items: /bettermob give)");
         }

@@ -3,6 +3,7 @@
 ---
 
 <center>
+<a href="https://modrinth.com/plugin/bettermobcrucible"><img alt="modrinth" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/available/modrinth_vector.svg"></a>
 <a href="https://github.com/HyperGaming99/BetterMobCrucible/releases/latest"><img alt="github" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/available/github_vector.svg"></a>
 </center>
 
@@ -61,8 +62,8 @@ example_wand:
 | Mechanic | `setlore{lore=line 1\|line 2}` | Replaces the held item's lore |
 | Placeholder | `<itemnbt.key>`, `<item.nbt.key>`, `<item.id>` | Needs a BetterMob build with the placeholder API |
 
-`~onUse` stays with BetterMob. BetterMob may log the extra triggers as invalid lines when it loads
-items; that is harmless. They are written as skills into
+`~onUse` stays with BetterMob. The extra triggers are registered in BetterMob (1.1.9 or newer), so
+the load stays silent; older versions log them as invalid lines, which is harmless. They are written as skills into
 `plugins/BetterMob/packs/BetterMobCrucible/skills/items.yml`, and BetterMob reloads when they change.
 
 ⌨️ Commands
@@ -94,7 +95,8 @@ mvn package
 ```
 
 The BetterMob API classes under `src/main/java/eu/northsoft/bettermob/api` are a compile-only copy
-(excluded from the jar, BetterMob provides them at runtime). Update them when the BetterMob API changes.
+(excluded from the jar, BetterMob provides them at runtime). CI replaces them with the API of BetterMob's
+`dev` branch before every build; locally run `.github/scripts/sync-bettermob-api.sh [ref]` to do the same.
 CI builds on every push to `main` and creates or updates the release `v<version>`.
 
 📄 License

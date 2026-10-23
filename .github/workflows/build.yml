@@ -2,9 +2,9 @@ name: Build and Release
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch: {}
 
 concurrency:
@@ -39,6 +39,9 @@ jobs:
             git log $range --pretty=format:"- %s ([\`%h\`](https://github.com/${{ github.repository }}/commit/%H))"
             echo
           } > "$RUNNER_TEMP/commits.md"
+
+      - name: Sync the BetterMob API from BetterMob's dev branch
+        run: .github/scripts/sync-bettermob-api.sh dev
 
       - name: Build
         run: mvn -B clean package
