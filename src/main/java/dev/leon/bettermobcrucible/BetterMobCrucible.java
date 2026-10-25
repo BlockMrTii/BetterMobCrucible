@@ -56,8 +56,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 public final class BetterMobCrucible extends JavaPlugin implements Listener {
     private static final Pattern TRIGGER = Pattern.compile("\\s*~on([A-Za-z]+)(?::(\\d+))?\\s*$");
     private static final String PACK_NAME = "BetterMobCrucible";
-    /** Wird von BetterMob selbst ausgefuehrt. */
-    private static final String NATIVE_TRIGGER = "use";
+    private static final List<String> EXTRA_TRIGGERS = List.of("swing", "pressf", "equip", "pickup", "itempickup", "drop", "itemdrop", "timer");
+    private static final String TIMER_TRIGGER = "timer";
     private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacyAmpersand();
 
     private record TimerEntry(String skill, int interval) {}
@@ -70,6 +70,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
 
     private final Map<String, NamespacedKey> nbtKeys = new ConcurrentHashMap<>();
     private volatile Snapshot snapshot = Snapshot.EMPTY;
+    private volatile Set<String> ownTriggers = Set.copyOf(EXTRA_TRIGGERS);
     private ScheduledTask timerTask;
     private long tick;
     private Plugin betterMob;
@@ -98,13 +99,18 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
 
     /** Meldet die Zusatz-Trigger bei BetterMob an (ab 1.1.9), damit beim Laden keine Warnungen mehr kommen. */
     private void registerTriggers() {
+        Set<String> own = new HashSet<>();
         try {
-            for (String trigger : List.of("swing", "pressf", "equip", "pickup", "itempickup", "drop", "itemdrop", "timer")) {
-                api.registerTrigger(this, trigger);
+            for (String trigger : EXTRA_TRIGGERS) {
+                if (api.registerTrigger(this, trigger) || trigger.equals(TIMER_TRIGGER)) own.add(trigger);
             }
         } catch (LinkageError e) {
             getLogger().info("BetterMob kennt registerTrigger nicht (vor 1.1.9) - die Zusatz-Trigger loesen dort Lade-Warnungen aus, laufen aber.");
+            return;
         }
+        ownTriggers = Set.copyOf(own);
+        List<String> handledByBetterMob = EXTRA_TRIGGERS.stream().filter(trigger -> !own.contains(trigger)).toList();
+        if (!handledByBetterMob.isEmpty()) getLogger().info("BetterMob loest " + handledByBetterMob + " selbst aus - diese Trigger uebernimmt BetterMobCrucible nicht.");
     }
 
     NamespacedKey nbtKey(String key) {
@@ -127,6 +133,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
         Map<String, List<TimerEntry>> timers = new HashMap<>();
         Set<String> triggers = new HashSet<>();
         int period = 0;
+        Set<String> own = ownTriggers;
 
         YamlConfiguration generated = new YamlConfiguration();
         int registered = 0;
@@ -140,7 +147,7 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
                 if (dispatch.containsKey(key) || timers.containsKey(key)) continue;
 
                 Map<String, List<String>> groups = groupByTrigger(section.getStringList("Skills"));
-                groups.remove(NATIVE_TRIGGER);
+                groups.keySet().removeIf(trigger -> !own.contains(trigger.split(":", 2)[0]));
                 if (groups.isEmpty()) continue;
                 items++;
                 for (Map.Entry<String, List<String>> group : groups.entrySet()) {
