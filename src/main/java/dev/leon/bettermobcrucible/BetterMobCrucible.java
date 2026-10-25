@@ -54,7 +54,7 @@ import org.bukkit.plugin.java.JavaPlugin;
  * {@code ~onEquip}, {@code ~onPickup}, {@code ~onDrop} und {@code ~onTimer:<ticks>}.
  */
 public final class BetterMobCrucible extends JavaPlugin implements Listener {
-    private static final Pattern TRIGGER = Pattern.compile("\\s*~on([A-Za-z]+)(?::(\\d+))?\\s*$");
+    private static final Pattern TRIGGER = Pattern.compile("\\s*~on([A-Za-z]+)(?::(\\d+))?(?:\\s+(\\?!?~?\\w+(?:\\{.*})?))?\\s*$");
     private static final String PACK_NAME = "BetterMobCrucible";
     /** Wird von BetterMob selbst ausgefuehrt. */
     private static final String NATIVE_TRIGGER = "use";
@@ -252,7 +252,9 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
             if (matcher.find()) {
                 String trigger = matcher.group(1).toLowerCase(Locale.ROOT);
                 if (matcher.group(2) != null) trigger = trigger + ":" + matcher.group(2);
-                byTrigger.computeIfAbsent(trigger, k -> new ArrayList<>()).add(line.substring(0, matcher.start()).trim());
+                String step = line.substring(0, matcher.start()).trim();
+                if (matcher.group(3) != null) step = step + " " + matcher.group(3);
+                byTrigger.computeIfAbsent(trigger, k -> new ArrayList<>()).add(step);
             }
         }
         return byTrigger;
