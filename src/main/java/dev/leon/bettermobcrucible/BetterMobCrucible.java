@@ -147,8 +147,8 @@ public final class BetterMobCrucible extends JavaPlugin implements Listener {
                     String trigger = group.getKey();
                     String skillName = skillName(itemId, trigger);
                     generated.set(skillName + ".Skills", group.getValue());
-                    if (trigger.startsWith("timer:")) {
-                        int interval = parseInterval(trigger.substring("timer:".length()));
+                    if (trigger.equals("timer") || trigger.startsWith("timer:")) {
+                        int interval = trigger.equals("timer") ? 20 : parseInterval(trigger.substring("timer:".length()));
                         timers.computeIfAbsent(key, k -> new ArrayList<>()).add(new TimerEntry(skillName, interval));
                         period = period == 0 ? interval : gcd(period, interval);
                     } else {
